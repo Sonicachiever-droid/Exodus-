@@ -1930,56 +1930,59 @@ struct ContentView: View {
                 let introOffsetY = (1 - questionBoxIntroProgress) * ((proxy.size.height / 2) - topScreenY)
                 let questionBoxOffsetY = (1 - questionBoxIntroProgress) * ((proxy.size.height / 2) - orangeGreenUnitCenterY)
                 let shouldBlinkQuestionBox = !isCodeScreensaverMode && !isResolvingAnswer
+                let shouldShowQuestionUI = !isCodeScreensaverMode && !startupSequenceActivated && questionBoxIntroProgress > 0.0
 
-                HStack(spacing: screenPairSpacing) {
-                    MiniTVFrame(
-                        text: displayedStringStatusLabel,
-                        width: screenBannerWidth,
-                        height: screenBannerHeight,
-                        fontScale: 0.82,
-                        glowTint: questionBoxAssistActive ? .orange : nil,
-                        hitTestingEnabled: false
+                if shouldShowQuestionUI {
+                    HStack(spacing: screenPairSpacing) {
+                        MiniTVFrame(
+                            text: displayedStringStatusLabel,
+                            width: screenBannerWidth,
+                            height: screenBannerHeight,
+                            fontScale: 0.82,
+                            glowTint: questionBoxAssistActive ? .orange : nil,
+                            hitTestingEnabled: false
+                        )
+                        MiniTVFrame(
+                            text: displayedFretStatusLabel,
+                            width: screenBannerWidth,
+                            height: screenBannerHeight,
+                            fontScale: 0.82,
+                            glowTint: questionBoxAssistActive ? .orange : nil,
+                            hitTestingEnabled: false
+                        )
+                    }
+                    .scaleEffect(introScale)
+                    .animation(.easeInOut(duration: 0.5), value: questionBoxIntroProgress)
+                    .offset(y: introOffsetY)
+                    .frame(width: proxy.size.width, height: screenBannerHeight)
+                    .position(x: proxy.size.width / 2, y: topScreenY)
+                    .opacity(codenameNemoEnabled ? 0 : initialGameplayDimOpacity * introScale)
+
+                    MiniTVFrame(text: leftChoiceNote, width: lowerScreenWidth, height: lowerScreenHeight, fontScale: 1.0)
+                        .position(x: leftAnswerCenterX, y: noteChoiceY)
+                        .allowsHitTesting(false)
+                        .opacity(codenameNemoEnabled ? 0 : introScale)
+
+                    MiniTVFrame(text: rightChoiceNote, width: lowerScreenWidth, height: lowerScreenHeight, fontScale: 1.0)
+                        .position(x: rightAnswerCenterX, y: noteChoiceY)
+                        .allowsHitTesting(false)
+                        .opacity(codenameNemoEnabled ? 0 : introScale)
+
+                    WhiteNoteBoxOverlay(
+                        centerY: orangeGreenUnitCenterY,
+                        availableSize: proxy.size,
+                        boxHeight: gridRowHeight * 0.9,
+                        neckWidth: neckWidth,
+                        activeStringNumbers: activePickedStringNumbers,
+                        answerFeedback: activeAnswerFeedback,
+                        currentQuestionIsAccidental: currentQuestionIsAccidental,
+                        blinkingActive: shouldBlinkQuestionBox,
+                        blinkOrange: questionBoxPulsePhase
                     )
-                    MiniTVFrame(
-                        text: displayedFretStatusLabel,
-                        width: screenBannerWidth,
-                        height: screenBannerHeight,
-                        fontScale: 0.82,
-                        glowTint: questionBoxAssistActive ? .orange : nil,
-                        hitTestingEnabled: false
-                    )
+                    .allowsHitTesting(false)
+                    .offset(y: questionBoxOffsetY)
+                    .opacity(codenameNemoEnabled ? 0 : initialGameplayDimOpacity)
                 }
-                .scaleEffect(introScale)
-                .animation(.easeInOut(duration: 0.5), value: questionBoxIntroProgress)
-                .offset(y: introOffsetY)
-                .frame(width: proxy.size.width, height: screenBannerHeight)
-                .position(x: proxy.size.width / 2, y: topScreenY)
-                .opacity(codenameNemoEnabled ? 0 : initialGameplayDimOpacity * introScale)
-
-                MiniTVFrame(text: leftChoiceNote, width: lowerScreenWidth, height: lowerScreenHeight, fontScale: 1.0)
-                    .position(x: leftAnswerCenterX, y: noteChoiceY)
-                    .allowsHitTesting(false)
-                    .opacity(codenameNemoEnabled ? 0 : introScale)
-
-                MiniTVFrame(text: rightChoiceNote, width: lowerScreenWidth, height: lowerScreenHeight, fontScale: 1.0)
-                    .position(x: rightAnswerCenterX, y: noteChoiceY)
-                    .allowsHitTesting(false)
-                    .opacity(codenameNemoEnabled ? 0 : introScale)
-
-                WhiteNoteBoxOverlay(
-                    centerY: orangeGreenUnitCenterY,
-                    availableSize: proxy.size,
-                    boxHeight: gridRowHeight * 0.9,
-                    neckWidth: neckWidth,
-                    activeStringNumbers: activePickedStringNumbers,
-                    answerFeedback: activeAnswerFeedback,
-                    currentQuestionIsAccidental: currentQuestionIsAccidental,
-                    blinkingActive: shouldBlinkQuestionBox,
-                    blinkOrange: questionBoxPulsePhase
-                )
-                .allowsHitTesting(false)
-                .offset(y: questionBoxOffsetY)
-                .opacity(codenameNemoEnabled ? 0 : initialGameplayDimOpacity)
 
                 GoldHorizontalPipingLine(width: whitePipingWidth)
                     .position(x: proxy.size.width / 2, y: upperWhitePipingY)
