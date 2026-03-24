@@ -7,13 +7,26 @@ final class BackingTrackEngine {
     private let bassSampler = AVAudioUnitSampler()
     private let drumsSampler = AVAudioUnitSampler()
     private lazy var sequencer = AVAudioSequencer(audioEngine: engine)
-    private let soundBankURL: URL? = BackingTrackEngine.locateSoundBank()
+    private var midiPlayer: AVMIDIPlayer?
     private(set) var currentTrack: BackingTrack?
     private(set) var isPlaying: Bool = false
     private var currentArrangement: BackingArrangementPreset = .epDrumsPad
     private var currentTransposeSemitones: Int = 0
+    private var hasLoadedVoices: Bool = false
+    private var soundbankURL: URL?
 
     init() {
+        // Load bundled DLS first; fall back to system GS bank
+        if let bundledDLS = Bundle.main.url(forResource: "gs_instruments", withExtension: "dls") {
+            soundbankURL = bundledDLS
+            print("[BackingTrackEngine] Loaded bundled DLS: \(bundledDLS.lastPathComponent)")
+        } else if let systemDLS = defaultSoundBankURL() {
+            soundbankURL = systemDLS
+            print("[BackingTrackEngine] Using system GS soundbank: \(systemDLS.lastPathComponent)")
+        } else {
+            print("[BackingTrackEngine] ⚠️ No SoundFont found – MIDI may be silent or use default synth")
+        }
+
         engine.attach(keysSampler)
         engine.attach(bassSampler)
         engine.attach(drumsSampler)
@@ -22,14 +35,13 @@ final class BackingTrackEngine {
         engine.connect(drumsSampler, to: engine.mainMixerNode, format: nil)
         engine.mainMixerNode.outputVolume = 0.72
         configureAudioSession()
-        reportSoundBankStatus()
         loadSamplerVoices(for: currentArrangement)
         startEngineIfNeeded()
     }
 
     func configure(arrangement: BackingArrangementPreset, transposeSemitones: Int) {
         let normalizedTranspose = max(-24, min(transposeSemitones, 24))
-        guard arrangement != currentArrangement || normalizedTranspose != currentTransposeSemitones else { return }
+        guard arrangement != currentArrangement || normalizedTranspose != currentTransposeSemitones || !hasLoadedVoices else { return }
         currentArrangement = arrangement
         currentTransposeSemitones = normalizedTranspose
         loadSamplerVoices(for: arrangement)
@@ -47,11 +59,33 @@ final class BackingTrackEngine {
 
     func play(track: BackingTrack) {
         guard let trackURL = track.resourceURL() else {
-            print("❌ MIDI file missing from bundle: \(track.resourceName).\(track.fileExtension)")
+            print("❌ MIDI file not found: \(track.resourceName)")
             return
         }
+        print("MIDI URL: \(trackURL.absoluteString)")
+
+        stop(clearTrackSelection: false)
+
         do {
-            stop(clearTrackSelection: false)
+            midiPlayer = try AVMIDIPlayer(contentsOf: trackURL, soundBankURL: soundbankURL)
+            midiPlayer?.prepareToPlay()
+            midiPlayer?.play { [weak self] in
+                DispatchQueue.main.async {
+                    guard let self else { return }
+                    guard self.isPlaying, self.currentTrack == track else { return }
+                    self.play(track: track)
+                }
+            }
+            currentTrack = track
+            isPlaying = true
+            print("▶️ Playing MIDI: \(track.resourceName) with soundbank: \(soundbankURL?.lastPathComponent ?? "NONE")")
+            return
+        } catch {
+            print("❌ Failed to create AVMIDIPlayer: \(error)")
+        }
+
+        // Fallback to sequencer if MIDI player fails
+        do {
             sequencer = AVAudioSequencer(audioEngine: engine)
             try sequencer.load(from: trackURL, options: [])
             routeTracksToSamplers()
@@ -62,12 +96,15 @@ final class BackingTrackEngine {
             try sequencer.start()
             currentTrack = track
             isPlaying = true
-            print("▶️ Playing backing track: \(track.title) from \(trackURL.lastPathComponent) — soundbank loaded: \(soundBankURL != nil)")
+            print("[BackingTrackEngine] Started track \(track.resourceName) from \(trackURL.lastPathComponent)")
+            print("[BackingTrackEngine] Sequencer tracks: \(sequencer.tracks.count), routed to samplers")
+            return
         } catch {
-            currentTrack = nil
-            isPlaying = false
-            print("❌ Failed to start MIDI playback for \(track.title): \(error.localizedDescription)")
+            print("[BackingTrackEngine] Sequencer failed for \(track.resourceName): \(error.localizedDescription)")
         }
+
+        currentTrack = nil
+        isPlaying = false
     }
 
     func stop() {
@@ -75,6 +112,8 @@ final class BackingTrackEngine {
     }
 
     private func stop(clearTrackSelection: Bool) {
+        midiPlayer?.stop()
+        midiPlayer = nil
         if sequencer.isPlaying {
             sequencer.stop()
         }
@@ -89,21 +128,16 @@ final class BackingTrackEngine {
     }
 
     private func routeTracksToSamplers() {
-        for track in sequencer.tracks {
-            track.destinationAudioUnit = nil
+        for (index, track) in sequencer.tracks.enumerated() {
             track.isMuted = false
-        }
-
-        guard sequencer.tracks.count > 1 else { return }
-
-        if sequencer.tracks.count > 1 {
-            sequencer.tracks[1].destinationAudioUnit = keysSampler
-        }
-        if sequencer.tracks.count > 2 {
-            sequencer.tracks[2].destinationAudioUnit = bassSampler
-        }
-        if sequencer.tracks.count > 3 {
-            sequencer.tracks[3].destinationAudioUnit = drumsSampler
+            switch index {
+            case 2:
+                track.destinationAudioUnit = bassSampler
+            case 3:
+                track.destinationAudioUnit = drumsSampler
+            default:
+                track.destinationAudioUnit = keysSampler
+            }
         }
     }
 
@@ -123,64 +157,33 @@ final class BackingTrackEngine {
     }
 
     private func applyArrangementMix() {
-        let keysVolume: Float
-        let bassVolume: Float
-        let drumsVolume: Float
-
-        switch currentArrangement {
-        case .epDrumsPad:
-            keysVolume = 0.82
-            bassVolume = 0.72
-            drumsVolume = 0.82
-        case .keysDrumsStrings:
-            keysVolume = 0.88
-            bassVolume = 0.76
-            drumsVolume = 0.8
-        case .epDrumsOnly:
-            keysVolume = 0.84
-            bassVolume = 0
-            drumsVolume = 0.86
-        case .padDrumsOnly:
-            keysVolume = 0.42
-            bassVolume = 0
-            drumsVolume = 0.84
-        }
+        // Force full mix to eliminate arrangement gating as a variable
+        let keysVolume: Float = 0.88
+        let bassVolume: Float = 0.78
+        let drumsVolume: Float = 0.86
 
         keysSampler.volume = keysVolume
         bassSampler.volume = bassVolume
         drumsSampler.volume = drumsVolume
 
+        // Explicitly unmute bass and drums at sequencer level if present
         if sequencer.tracks.count > 2 {
-            sequencer.tracks[2].isMuted = bassVolume == 0
+            sequencer.tracks[2].isMuted = false
+        }
+        if sequencer.tracks.count > 3 {
+            sequencer.tracks[3].isMuted = false
         }
     }
 
     private func loadSamplerVoices(for arrangement: BackingArrangementPreset) {
-        guard let soundBankURL else {
-            print("⚠️ No soundfont (.sf2/.dls) found — backing tracks will likely sound incorrect.")
+        guard let soundBankURL = defaultSoundBankURL() else {
+            print("[BackingTrackEngine] No soundbank URL resolved for arrangement \(arrangement.rawValue)")
             return
         }
-        loadInstrument(
-            on: keysSampler,
-            program: keysProgram(for: arrangement),
-            bankMSB: UInt8(kAUSampler_DefaultMelodicBankMSB),
-            bankLSB: 0,
-            soundBankURL: soundBankURL
-        )
-        loadInstrument(
-            on: bassSampler,
-            program: 33,
-            bankMSB: UInt8(kAUSampler_DefaultMelodicBankMSB),
-            bankLSB: 0,
-            soundBankURL: soundBankURL
-        )
-        loadInstrument(
-            on: drumsSampler,
-            program: 0,
-            bankMSB: UInt8(kAUSampler_DefaultPercussionBankMSB),
-            bankLSB: 0,
-            soundBankURL: soundBankURL
-        )
+        loadInstrument(on: keysSampler, program: keysProgram(for: arrangement), bankMSB: UInt8(kAUSampler_DefaultMelodicBankMSB), bankLSB: 0, soundBankURL: soundBankURL)
+        loadInstrument(on: bassSampler, program: 33, bankMSB: UInt8(kAUSampler_DefaultMelodicBankMSB), bankLSB: 0, soundBankURL: soundBankURL)
+        loadInstrument(on: drumsSampler, program: 0, bankMSB: UInt8(kAUSampler_DefaultPercussionBankMSB), bankLSB: 0, soundBankURL: soundBankURL)
+        hasLoadedVoices = true
         applyTranspose()
     }
 
@@ -205,33 +208,20 @@ final class BackingTrackEngine {
                 bankMSB: bankMSB,
                 bankLSB: bankLSB
             )
+            print("[BackingTrackEngine] Loaded soundbank instrument program \(program) from \(soundBankURL.lastPathComponent)")
         } catch {
-            print("⚠️ Failed loading program \(program) from \(soundBankURL.lastPathComponent): \(error.localizedDescription)")
+            print("[BackingTrackEngine] Failed loading program \(program) from \(soundBankURL.lastPathComponent): \(error.localizedDescription)")
         }
     }
 
-    private func reportSoundBankStatus() {
-        if let soundBankURL {
-            print("✅ Soundbank ready: \(soundBankURL.lastPathComponent)")
-        } else {
-            print("⚠️ Soundbank missing – add a General MIDI .sf2 (e.g., 'GeneralUser GS MuseScore.sf2') to the target for proper playback.")
+    private func defaultSoundBankURL() -> URL? {
+        let systemURL = URL(fileURLWithPath: "/System/Library/Components/CoreAudio.component/Contents/Resources/gs_instruments.dls")
+        if FileManager.default.fileExists(atPath: systemURL.path) {
+            print("[BackingTrackEngine] Using system soundbank at \(systemURL.path)")
+            return systemURL
         }
-    }
-
-    private static func locateSoundBank(in bundle: Bundle = .main) -> URL? {
-        if let preferred = bundle.url(forResource: "GeneralUser GS MuseScore", withExtension: "sf2") {
-            return preferred
-        }
-
-        if let anySF2 = (bundle.urls(forResourcesWithExtension: "sf2", subdirectory: nil) ?? []).first {
-            return anySF2
-        }
-
-        if let bundledDLS = bundle.url(forResource: "gs_instruments", withExtension: "dls") {
-            return bundledDLS
-        }
-
-        return URL(string: "file:///System/Library/Components/CoreAudio.component/Contents/Resources/gs_instruments.dls")
+        print("[BackingTrackEngine] System soundbank missing at \(systemURL.path)")
+        return nil
     }
 
     private func configureAudioSession() {
