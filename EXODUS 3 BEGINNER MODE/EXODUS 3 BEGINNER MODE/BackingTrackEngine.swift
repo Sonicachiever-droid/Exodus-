@@ -7,11 +7,12 @@ final class BackingTrackEngine {
     private let bassSampler = AVAudioUnitSampler()
     private let drumsSampler = AVAudioUnitSampler()
     private lazy var sequencer = AVAudioSequencer(audioEngine: engine)
-    private let soundBankURL: URL? = BackingTrackEngine.locateSoundBank()
+    private lazy var soundBankURL: URL? = BackingTrackEngine.locateSoundBank()
     private(set) var currentTrack: BackingTrack?
     private(set) var isPlaying: Bool = false
     private var currentArrangement: BackingArrangementPreset = .epDrumsPad
     private var currentTransposeSemitones: Int = 0
+    private var isInitialized = false
 
     init() {
         engine.attach(keysSampler)
@@ -23,8 +24,20 @@ final class BackingTrackEngine {
         engine.mainMixerNode.outputVolume = 0.72
         configureAudioSession()
         reportSoundBankStatus()
+        // Defer sampler loading until first play to avoid blocking startup
+    }
+
+    private func ensureInitialized() {
+        guard !isInitialized else { return }
+        guard let soundBankURL else {
+            print("⚠️ Cannot initialize - no soundbank available")
+            return
+        }
+        print("🎵 Initializing with soundbank: \(soundBankURL.lastPathComponent)")
         loadSamplerVoices(for: currentArrangement)
+        applyArrangementMix()
         startEngineIfNeeded()
+        isInitialized = true
     }
 
     func configure(arrangement: BackingArrangementPreset, transposeSemitones: Int) {
@@ -46,27 +59,52 @@ final class BackingTrackEngine {
     }
 
     func play(track: BackingTrack) {
+        print("🎵 BackingTrackEngine.play() called with: \(track.title)")
+        
         guard let trackURL = track.resourceURL() else {
             print("❌ MIDI file missing from bundle: \(track.resourceName).\(track.fileExtension)")
             return
         }
+        
+        ensureInitialized()
+
+        // Stop any existing playback
+        if sequencer.isPlaying {
+            sequencer.stop()
+        }
+        
+        // Ensure engine is running
+        if !engine.isRunning {
+            do {
+                try engine.start()
+                print("✅ Audio engine started")
+            } catch {
+                print("❌ Failed to start audio engine: \(error)")
+                return
+            }
+        }
+        
         do {
-            stop(clearTrackSelection: false)
+            // Load MIDI file into sequencer
             sequencer = AVAudioSequencer(audioEngine: engine)
-            try sequencer.load(from: trackURL, options: [])
+            try sequencer.load(from: trackURL, options: .smf_ChannelsToTracks)
+            
+            print("🎵 MIDI loaded with \(sequencer.tracks.count) tracks")
+
             routeTracksToSamplers()
             configureLooping()
-            applyArrangementMix()
-            startEngineIfNeeded()
+            
+            // Start playback
             sequencer.prepareToPlay()
             try sequencer.start()
+            
             currentTrack = track
             isPlaying = true
-            print("▶️ Playing backing track: \(track.title) from \(trackURL.lastPathComponent) — soundbank loaded: \(soundBankURL != nil)")
+            print("▶️ Playing: \(track.title)")
+            
         } catch {
-            currentTrack = nil
+            print("❌ Failed to play MIDI: \(error)")
             isPlaying = false
-            print("❌ Failed to start MIDI playback for \(track.title): \(error.localizedDescription)")
         }
     }
 
@@ -89,12 +127,15 @@ final class BackingTrackEngine {
     }
 
     private func routeTracksToSamplers() {
+        guard sequencer.tracks.count > 0 else {
+            print("⚠️ No tracks to route")
+            return
+        }
+        
         for track in sequencer.tracks {
             track.destinationAudioUnit = nil
             track.isMuted = false
         }
-
-        guard sequencer.tracks.count > 1 else { return }
 
         if sequencer.tracks.count > 1 {
             sequencer.tracks[1].destinationAudioUnit = keysSampler
@@ -105,6 +146,7 @@ final class BackingTrackEngine {
         if sequencer.tracks.count > 3 {
             sequencer.tracks[3].destinationAudioUnit = drumsSampler
         }
+        print("🎵 Routed \(sequencer.tracks.count) tracks to samplers")
     }
 
     private func applyTranspose() {
@@ -115,6 +157,7 @@ final class BackingTrackEngine {
     }
 
     private func configureLooping() {
+        guard sequencer.tracks.count > 0 else { return }
         for track in sequencer.tracks {
             track.loopRange = AVBeatRange(start: 0, length: intendedLoopLengthInBeats)
             track.numberOfLoops = -1
@@ -219,18 +262,27 @@ final class BackingTrackEngine {
     }
 
     private static func locateSoundBank(in bundle: Bundle = .main) -> URL? {
+        // Try the preferred GeneralUser GS MuseScore first
         if let preferred = bundle.url(forResource: "GeneralUser GS MuseScore", withExtension: "sf2") {
             return preferred
         }
-
+        
+        // Try the bundled GeneralUser GS v1.472
+        if let bundledGS = bundle.url(forResource: "GeneralUser GS v1.472", withExtension: "sf2") {
+            return bundledGS
+        }
+        
+        // Try any SF2 file
         if let anySF2 = (bundle.urls(forResourcesWithExtension: "sf2", subdirectory: nil) ?? []).first {
             return anySF2
         }
 
+        // Try bundled DLS
         if let bundledDLS = bundle.url(forResource: "gs_instruments", withExtension: "dls") {
             return bundledDLS
         }
 
+        // Fallback to system DLS
         return URL(string: "file:///System/Library/Components/CoreAudio.component/Contents/Resources/gs_instruments.dls")
     }
 
@@ -239,7 +291,9 @@ final class BackingTrackEngine {
         do {
             try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
             try session.setActive(true)
+            print("✅ Audio session configured for playback")
         } catch {
+            print("❌ Failed to configure audio session: \(error.localizedDescription)")
         }
     }
 
@@ -247,7 +301,19 @@ final class BackingTrackEngine {
         guard !engine.isRunning else { return }
         do {
             try engine.start()
+            print("✅ Audio engine started")
         } catch {
+            print("❌ Failed to start audio engine: \(error)")
+            // Retry once after a short delay
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+                guard let self = self, !self.engine.isRunning else { return }
+                do {
+                    try self.engine.start()
+                    print("✅ Audio engine started on retry")
+                } catch {
+                    print("❌ Failed to start audio engine on retry: \(error)")
+                }
+            }
         }
     }
 }

@@ -1666,7 +1666,6 @@ struct ContentView: View {
     
     // Chord system integration
     @StateObject private var chordGenerator = ChordGenerator()
-    @StateObject private var audioEngine = SimpleAudioEngine()
     @State private var correctAnswerSide: AnswerSide = .left
     @State private var isResolvingAnswer: Bool = false
     @State private var activePickedStringNumbers: [Int] = [1]
@@ -2562,9 +2561,6 @@ struct ContentView: View {
                     arrangement: audioSettings.selectedBackingArrangement,
                     transposeSemitones: newValue
                 )
-                
-                // Update chord accompaniment transposition
-                audioEngine.updateTransposition(round: newValue)
             }
             .onReceive(Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()) { date in
                 if startupSequenceActivated {
@@ -3336,10 +3332,6 @@ struct ContentView: View {
         manualTransportPlaybackActive = false
         transportStatusDetail = "MANUAL_STOP"
         playbackPathUsed = "NONE"
-        
-        // Stop chord accompaniment
-        audioEngine.stopAccompaniment()
-        
         showDeveloperPrompt("Transport: STOP")
     }
 
@@ -3359,10 +3351,6 @@ struct ContentView: View {
         manualTransportPlaybackActive = backingTrackEngine.isPlaying
         transportStatusDetail = backingTrackEngine.isPlaying ? "MANUAL_START_OK" : "MANUAL_START_FAILED"
         playbackPathUsed = backingTrackEngine.isPlaying ? "SEQUENCER" : "NONE"
-        
-        // Start chord accompaniment
-        audioEngine.startAccompaniment(currentRound: currentRound)
-        
         showDeveloperPrompt("Transport: START \(selectedTrack.resourceName)")
     }
 
