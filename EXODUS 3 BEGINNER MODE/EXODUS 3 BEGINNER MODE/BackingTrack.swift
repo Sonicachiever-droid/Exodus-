@@ -14,9 +14,9 @@ struct BackingTrack: Identifiable, Equatable, Hashable {
             return url
         }
         #if DEBUG
-        // Development fallback: load directly from the project folder when not bundled
-        let devPath = "/Users/thomaskane/CascadeProjects/Project Exodus/EXODUS 4 BEGINNER MODE/EXODUS 4 BEGINNER MODE/\(resourceName).\(fileExtension)"
-        let devURL = URL(fileURLWithPath: devPath)
+        // Development fallback: load from the source directory when not bundled
+        let sourceDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+        let devURL = sourceDirectory.appendingPathComponent("\(resourceName).\(fileExtension)")
         if FileManager.default.fileExists(atPath: devURL.path) {
             return devURL
         }
@@ -29,9 +29,9 @@ struct BackingTrack: Identifiable, Equatable, Hashable {
         var urls = midiExtensions.flatMap { bundle.urls(forResourcesWithExtension: $0, subdirectory: nil) ?? [] }
         #if DEBUG
         if urls.isEmpty {
-            // Development fallback: read from project folder if not bundled
-            let devDir = URL(fileURLWithPath: "/Users/thomaskane/CascadeProjects/Project Exodus/EXODUS 4 BEGINNER MODE/EXODUS 4 BEGINNER MODE")
-            if let contents = try? FileManager.default.contentsOfDirectory(at: devDir, includingPropertiesForKeys: nil) {
+            // Development fallback: read from source directory if not bundled
+            let sourceDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+            if let contents = try? FileManager.default.contentsOfDirectory(at: sourceDirectory, includingPropertiesForKeys: nil) {
                 let devURLs = contents.filter { midiExtensions.contains($0.pathExtension.lowercased()) }
                 urls.append(contentsOf: devURLs)
             }

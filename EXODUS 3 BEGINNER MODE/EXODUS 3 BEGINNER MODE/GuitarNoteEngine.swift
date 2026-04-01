@@ -158,6 +158,7 @@ final class GuitarNoteEngine {
                 print("GuitarNoteEngine: Loaded guitar sounds from \(instrumentURL.lastPathComponent)")
                 return
             } catch {
+                print("GuitarNoteEngine: Failed loading \(instrumentURL.lastPathComponent) - \(error)")
             }
         }
 
@@ -173,6 +174,7 @@ final class GuitarNoteEngine {
                 print("GuitarNoteEngine: Using system sound bank fallback")
                 return
             } catch {
+                print("GuitarNoteEngine: Failed fallback sound bank load - \(error)")
             }
         }
     }
@@ -262,6 +264,7 @@ final class GuitarNoteEngine {
             try session.setCategory(.playback, mode: .default, options: [.mixWithOthers])
             try session.setActive(true)
         } catch {
+            print("GuitarNoteEngine: Audio session configuration failed - \(error)")
         }
     }
 
@@ -270,6 +273,7 @@ final class GuitarNoteEngine {
         do {
             try engine.start()
         } catch {
+            print("GuitarNoteEngine: Engine start failed - \(error)")
         }
     }
 }

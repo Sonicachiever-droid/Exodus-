@@ -1730,7 +1730,7 @@ struct ContentView: View {
 
     private let gameplayAudioEngine = GameplayAudioEngine()
     private let guitarNoteEngine = GuitarNoteEngine.shared
-    private let backingTrackEngine = BackingTrackEngine()
+    private let midiEngine = SimpleMIDIEngine()
     private let audioEngineEnabled: Bool = false
     private let speakBeatTicks: Bool = false
     private let speakGameplayPrompts: Bool = false
@@ -2557,10 +2557,7 @@ struct ContentView: View {
                 syncBackingTrackPlayback()
             }
             .onChange(of: currentRound) { _, newValue in
-                backingTrackEngine.configure(
-                    arrangement: audioSettings.selectedBackingArrangement,
-                    transposeSemitones: newValue
-                )
+                // Transposition removed - using fixed keys sound
             }
             .onReceive(Timer.publish(every: 0.1, on: .main, in: .common).autoconnect()) { date in
                 if startupSequenceActivated {
@@ -3283,13 +3280,8 @@ struct ContentView: View {
     }
 
     private func syncBackingTrackPlayback() {
-        backingTrackEngine.configure(
-            arrangement: audioSettings.selectedBackingArrangement,
-            transposeSemitones: currentRound
-        )
-
         guard !availableBackingTracks.isEmpty else {
-            backingTrackEngine.stop()
+            midiEngine.stop()
             isBackingTrackPlaying = false
             transportStatusDetail = "NO_TRACKS_DISCOVERED"
             playbackPathUsed = "NONE"
@@ -3298,7 +3290,7 @@ struct ContentView: View {
 
         audioSettings.selectInitialBackingTrackIfNeeded(from: availableBackingTracks)
         guard backingTrackShouldBeActive || manualTransportPlaybackActive else {
-            backingTrackEngine.stop()
+            midiEngine.stop()
             isBackingTrackPlaying = false
             transportStatusDetail = "GATED_BY_MODE_OR_PHASE"
             playbackPathUsed = "NONE"
@@ -3306,18 +3298,19 @@ struct ContentView: View {
         }
 
         guard let selectedTrackID = audioSettings.selectedBackingTrackID,
-              let selectedTrack = availableBackingTracks.first(where: { $0.id == selectedTrackID }) else {
-            backingTrackEngine.stop()
+              let selectedTrack = availableBackingTracks.first(where: { $0.id == selectedTrackID }),
+              let trackURL = selectedTrack.resourceURL() else {
+            midiEngine.stop()
             isBackingTrackPlaying = false
             transportStatusDetail = "INVALID_TRACK_SELECTION"
             playbackPathUsed = "NONE"
             return
         }
 
-        backingTrackEngine.play(track: selectedTrack)
-        isBackingTrackPlaying = backingTrackEngine.isPlaying
-        transportStatusDetail = backingTrackEngine.isPlaying ? "AUTO_PLAY_OK" : "AUTO_PLAY_FAILED"
-        playbackPathUsed = backingTrackEngine.isPlaying ? "SEQUENCER" : "NONE"
+        midiEngine.play(url: trackURL, title: selectedTrack.title, loop: true)
+        isBackingTrackPlaying = midiEngine.isPlaying
+        transportStatusDetail = midiEngine.isPlaying ? "AUTO_PLAY_OK" : "AUTO_PLAY_FAILED"
+        playbackPathUsed = midiEngine.isPlaying ? "SEQUENCER" : "NONE"
     }
 
     private func handleFretboardButtonPress() {
@@ -3327,8 +3320,8 @@ struct ContentView: View {
     }
 
     private func handleTransportStopButton() {
-        backingTrackEngine.stop()
-        isBackingTrackPlaying = backingTrackEngine.isPlaying
+        midiEngine.stop()
+        isBackingTrackPlaying = midiEngine.isPlaying
         manualTransportPlaybackActive = false
         transportStatusDetail = "MANUAL_STOP"
         playbackPathUsed = "NONE"
@@ -3336,21 +3329,18 @@ struct ContentView: View {
     }
 
     private func handleTransportStartButton() {
-        guard let selectedTrack = resolvedTransportTrack() else {
+        guard let selectedTrack = resolvedTransportTrack(),
+              let trackURL = selectedTrack.resourceURL() else {
             showDeveloperPrompt("No track selected for restart")
             return
         }
 
-        backingTrackEngine.configure(
-            arrangement: audioSettings.selectedBackingArrangement,
-            transposeSemitones: currentRound
-        )
-        backingTrackEngine.stop()
-        backingTrackEngine.play(track: selectedTrack)
-        isBackingTrackPlaying = backingTrackEngine.isPlaying
-        manualTransportPlaybackActive = backingTrackEngine.isPlaying
-        transportStatusDetail = backingTrackEngine.isPlaying ? "MANUAL_START_OK" : "MANUAL_START_FAILED"
-        playbackPathUsed = backingTrackEngine.isPlaying ? "SEQUENCER" : "NONE"
+        midiEngine.stop()
+        midiEngine.play(url: trackURL, title: selectedTrack.title, loop: true)
+        isBackingTrackPlaying = midiEngine.isPlaying
+        manualTransportPlaybackActive = midiEngine.isPlaying
+        transportStatusDetail = midiEngine.isPlaying ? "MANUAL_START_OK" : "MANUAL_START_FAILED"
+        playbackPathUsed = midiEngine.isPlaying ? "SEQUENCER" : "NONE"
         showDeveloperPrompt("Transport: START \(selectedTrack.resourceName)")
     }
 
